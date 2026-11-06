@@ -20,6 +20,14 @@ ROOT = Path(__file__).resolve().parent
 os.chdir(ROOT)
 sys.path.insert(0, str(ROOT))
 
+# Self-heal after an update: a long-running host (e.g. Streamlit Cloud) can keep OLD copies of our modules in memory
+# while new files are on disk. If the newest module can't import, drop all cached trader modules and load fresh ones.
+try:
+    import trader.research  # noqa: F401  (needs the newest trader.intraday)
+except ImportError:
+    for _n in [m for m in sys.modules if m == "trader" or m.startswith("trader.")]:
+        del sys.modules[_n]
+
 from trader import approvals, runner, settings  # noqa: E402
 from trader import live as live_mod  # noqa: E402
 from trader.dhan_client import fetch_candles, load_env, make_dhan, resolve_security_ids, save_env, token_expiry  # noqa: E402

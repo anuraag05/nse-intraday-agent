@@ -143,3 +143,24 @@ def test_learn_tab_demo_runs(at):
     assert len(at.metric) >= 4 and any("Demo data" in w.value for w in at.warning)
     assert not any(b.key == "learn_apply" for b in at.button)             # random data -> nothing to apply
     assert (Path.cwd() / "state" / "learned.json").exists()
+
+
+def test_app_heals_stale_cached_modules(at):
+    """Simulates Streamlit Cloud keeping an OLD trader.intraday in memory after an update."""
+    import types
+
+    saved = {n: m for n, m in sys.modules.items() if n == "trader" or n.startswith("trader.")}
+    try:
+        stale = types.ModuleType("trader.intraday")
+        stale.__dict__.update({k: v for k, v in saved["trader.intraday"].__dict__.items()
+                               if k not in ("base_indicators", "apply_signals")})   # old version lacks the new functions
+        sys.modules["trader.intraday"] = stale
+        sys.modules.pop("trader.research", None)
+        at.run()
+        assert not at.exception, at.exception
+        assert len(at.tabs) == 6
+        assert hasattr(sys.modules["trader.intraday"], "base_indicators")            # fresh module was loaded
+    finally:
+        for n in [m for m in sys.modules if m == "trader" or m.startswith("trader.")]:
+            del sys.modules[n]
+        sys.modules.update(saved)
