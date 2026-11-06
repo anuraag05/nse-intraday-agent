@@ -1,7 +1,7 @@
 """Live / paper intraday loop. One cycle per completed 5-minute candle during market hours (IST)."""
 from __future__ import annotations
 
-import math
+import json
 import os
 import time
 from datetime import datetime, timedelta
@@ -64,60 +64,80 @@ def fresh_signals(bars: dict, ip: dict, now: datetime, held: set, traded: set) -
     return sorted(cands, key=lambda c: c["vol_ratio"], reverse=True), ind
 
 
-def run_intraday(cfg: dict, live: bool) -> None:
-    ip, rk, lv = cfg["intraday"], cfg["risk"], cfg["live"]
-    if live and cfg.get("mode") != "live":
-        raise SystemExit("Refusing: --live given but config mode is not 'live'.")
-    if cfg.get("mode") == "live" and not live:
-        print("[info] config mode is live but --live not passed; running in paper mode.")
+class Session:
+    """One trading day. step(now) processes the latest closed candle and is safe to call repeatedly
+    (every minute or every 5 minutes): re-checking the same candle never repeats an order.
+    Progress (symbols tried today, trade count, day-start equity) is saved so a restart resumes cleanly."""
 
-    dhan = make_dhan()
-    syms = cfg["universe"]
-    ids = resolve_security_ids(dhan, syms, cfg.get("dhan", {}).get("security_ids"))
-    if os.path.exists(SQUAREOFF_FILE):
-        os.remove(SQUAREOFF_FILE)
-    if os.path.exists(STOP_FILE):
-        print("[info] state/STOP exists: no new entries will be taken until it is removed.")
-    broker = DhanBroker(dhan, ids, rk, lv) if live else PaperIntradayBroker(rk)
-    base = rk["trading_capital"] if live else broker.s["capital"]
-    print(f"Mode: {'LIVE' if live else 'paper'} | symbols: {len(syms)} | capital base: {base:,.0f}")
+    def __init__(self, cfg: dict, live: bool, dhan=None, path: str = "state/session.json"):
+        self.cfg, self.live, self.path = cfg, live, path
+        self.ip, self.rk, self.lv = cfg["intraday"], cfg["risk"], cfg["live"]
+        if live and cfg.get("mode") != "live":
+            raise SystemExit("Refusing: --live given but config mode is not 'live'.")
+        self.dhan = dhan or make_dhan()
+        self.syms = cfg["universe"]
+        self.ids = resolve_security_ids(self.dhan, self.syms, cfg.get("dhan", {}).get("security_ids"))
+        self.broker = DhanBroker(self.dhan, self.ids, self.rk, self.lv) if live else PaperIntradayBroker(self.rk)
+        self.open_m, self.cut_m, self.sq_m = (_mins(self.ip[k]) for k in ("session_start", "entry_cutoff", "squareoff_time"))
+        self.candle = self.ip["candle_minutes"]
+        self.lines: list[str] = []
+        today = now_ist().date().isoformat()
+        st = {}
+        try:
+            with open(path) as f:
+                st = json.load(f)
+        except (OSError, ValueError):
+            pass
+        if st.get("day") != today or st.get("live") != live:
+            st = {"day": today, "live": live, "traded": [], "n_trades": 0, "day_start_eq": None}
+        self.st = st
 
-    open_m, cut_m, sq_m = _mins(ip["session_start"]), _mins(ip["entry_cutoff"]), _mins(ip["squareoff_time"])
-    step = ip["candle_minutes"]
-    traded: set[str] = set()
-    n_trades = 0
-    day_start_eq = None
+    def say(self, msg: str) -> None:
+        print(msg, flush=True)
+        self.lines.append(msg)
 
-    while True:
-        now = now_ist()
+    def _save(self) -> None:
+        os.makedirs(os.path.dirname(self.path) or ".", exist_ok=True)
+        with open(self.path, "w") as f:
+            json.dump(self.st, f)
+
+    def market_closed(self, now: datetime) -> bool:
+        return now.weekday() >= 5 or now.hour * 60 + now.minute >= 15 * 60 + 30
+
+    def step(self, now: datetime) -> str:
+        """Returns 'done' (nothing more to do today), 'waiting' (opening range forming) or 'running'."""
         mins = now.hour * 60 + now.minute
-        if now.weekday() >= 5 or mins >= 15 * 60 + 30:
-            print("Market closed. Done."); return
-        # sleep until just after the next candle boundary
-        time.sleep(seconds_to_next_cycle(now, step, lv["candle_delay_seconds"]))
-        now = now_ist()
-        mins = now.hour * 60 + now.minute
-        if mins < open_m + ip["or_minutes"]:
-            continue  # opening range still forming
+        if self.market_closed(now):
+            return "done"
+        if mins < self.open_m + self.ip["or_minutes"]:
+            return "waiting"
+        ip, rk, broker = self.ip, self.rk, self.broker
+        traded = set(self.st["traded"])
 
-        bars = fetch_today(dhan, ids, syms, step, now)
+        bars = fetch_today(self.dhan, self.ids, self.syms, self.candle, now)
         prices = {s: float(df["close"].iloc[-1]) for s, df in bars.items()}
         broker.update(bars, prices)
         eq = broker.equity(prices)
-        day_start_eq = day_start_eq or eq
+        if self.st["day_start_eq"] is None:
+            self.st["day_start_eq"] = eq
+        tag = f"{now:%H:%M}"
 
-        if mins >= sq_m or os.path.exists(SQUAREOFF_FILE):
-            print(f"{now:%H:%M} square-off"); broker.square_off_all(prices)
+        if mins >= self.sq_m or os.path.exists(SQUAREOFF_FILE):
+            self.say(f"{tag} square-off")
+            broker.square_off_all(prices)
             if os.path.exists(SQUAREOFF_FILE):
                 os.remove(SQUAREOFF_FILE)
+            self._save()
             if not broker.positions:
-                print("Flat. Done for the day."); return
-            continue
+                self.say("Flat. Done for the day.")
+                return "done"
+            return "running"
 
-        if mins > cut_m or os.path.exists(STOP_FILE):
-            print(f"{now:%H:%M} no new entries ({'STOP file' if os.path.exists(STOP_FILE) else 'after cutoff'}); "
-                  f"open: {list(broker.positions)}")
-            continue
+        if mins > self.cut_m or os.path.exists(STOP_FILE):
+            self.say(f"{tag} no new entries ({'paused' if os.path.exists(STOP_FILE) else 'after cutoff'}); "
+                     f"open: {list(broker.positions)}")
+            self._save()
+            return "running"
 
         cands, ind = fresh_signals(bars, ip, now, set(broker.positions), traded)
         sized = []
@@ -126,20 +146,48 @@ def run_intraday(cfg: dict, live: bool) -> None:
             qty = position_size(eq, c["close"], c["stop"], rk, c["side"])
             if qty >= 1:
                 sized.append({**c, "qty": qty})
+        self.st["traded"] = sorted(traded)
         if not sized:
-            print(f"{now:%H:%M} no actionable signals; open: {list(broker.positions)}"); continue
+            self.say(f"{tag} no actionable signals; open: {list(broker.positions)}")
+            self._save()
+            return "running"
 
         pf = {"equity": round(eq), "positions": broker.positions}
-        verdicts = {d["symbol"]: d for d in review_candidates(sized, ind, pf, cfg["claude_review"], SYSTEM_INTRADAY)}
+        verdicts = {d["symbol"]: d for d in
+                    review_candidates(sized, ind, pf, self.cfg["claude_review"], SYSTEM_INTRADAY)}
         for c in sized:
             d = verdicts.get(c["symbol"], {"action": "REJECT", "reason": "no decision"})
-            print(f"{now:%H:%M} {c['symbol']} {c['side']} qty={c['qty']}: {d['action']} - {d['reason']}")
+            self.say(f"{tag} {c['symbol']} {c['side']} qty={c['qty']}: {d['action']} - {d['reason']}")
             if d["action"] != "APPROVE":
                 continue
-            ok, why = can_open(len(broker.positions), broker.equity(prices), day_start_eq, rk)
-            if not ok or n_trades >= rk["max_trades_per_day"]:
-                print("   skipped:", why if not ok else "max trades per day"); continue
+            ok, why = can_open(len(broker.positions), broker.equity(prices), self.st["day_start_eq"], rk)
+            if not ok or self.st["n_trades"] >= rk["max_trades_per_day"]:
+                self.say("   skipped: " + (why if not ok else "max trades per day"))
+                continue
             res = broker.open(c["symbol"], c["side"], c["qty"], c["close"], c["stop"], c["target"])
-            print("   ->", res)
+            self.say(f"   -> {res}")
             if str(res.get("status", "")).startswith(("sent", "filled")):
-                n_trades += 1
+                self.st["n_trades"] += 1
+        self._save()
+        return "running"
+
+
+def run_intraday(cfg: dict, live: bool) -> None:
+    """Blocking loop for the background process / terminal: one step per completed candle."""
+    if cfg.get("mode") == "live" and not live:
+        print("[info] config mode is live but --live not passed; running in paper mode.")
+    if os.path.exists(SQUAREOFF_FILE):
+        os.remove(SQUAREOFF_FILE)
+    if os.path.exists(STOP_FILE):
+        print("[info] entries are paused (state/STOP exists) until it is removed.")
+    sess = Session(cfg, live)
+    base = cfg["risk"]["trading_capital"] if live else sess.broker.s["capital"]
+    print(f"Mode: {'LIVE' if live else 'paper'} | symbols: {len(sess.syms)} | capital base: {base:,.0f}")
+    while True:
+        now = now_ist()
+        if sess.market_closed(now):
+            print("Market closed. Done.")
+            return
+        time.sleep(seconds_to_next_cycle(now, sess.candle, sess.lv["candle_delay_seconds"]))
+        if sess.step(now_ist()) == "done":
+            return

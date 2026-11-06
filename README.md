@@ -4,7 +4,26 @@ A point-and-click dashboard that scans liquid NSE stocks for **opening-range bre
 
 > **Risk warning.** Most retail intraday traders lose money. This software is a tool, not advice, and has not been proven profitable. Paper-trade for weeks first. Live mode places real orders with real money; you are responsible for every trade. Automated order placement by retail clients is subject to SEBI and broker rules.
 
-## Quick start (no command line)
+## Option A - open it in your browser (no download, no install)
+
+Hosted on **Streamlit Community Cloud** (free). Works for backtests, market scans, connection test and **paper trading**. It cannot place live orders (see below).
+
+1. Go to **share.streamlit.io** and sign in with GitHub.
+2. Click **Create app** -> pick this repository, branch `main`, main file `app.py`. (For a private repo, allow Streamlit to access it when asked.)
+3. Open **Advanced settings -> Secrets** and paste (use your own values; template in `.streamlit/secrets.toml.example`):
+   ```
+   DHAN_CLIENT_ID = "..."
+   DHAN_ACCESS_TOKEN = "..."
+   APP_PASSWORD = "choose-a-password"
+   ```
+4. Click **Deploy**. You get a link you can bookmark and open from any device. Enter your password.
+5. Each morning: update `DHAN_ACCESS_TOKEN` (App menu -> Settings -> Secrets) or paste it in the Setup tab.
+
+On the hosted app, the **Run** tab has **Start paper session**: keep that page open during market hours; it checks the market every 2 minutes. If the page is closed or the free app goes to sleep, the session pauses and resumes when you reopen it (saved files can reset when the host restarts, so don't treat hosted paper results as a permanent record).
+
+**Why no live orders when hosted:** Dhan requires API orders to come from a registered static IP, and free cloud hosting has no fixed IP. To trade live you need Option B on a computer or server with a static IP registered in your Dhan account (or place the agent's suggestions manually in the Dhan app).
+
+## Option B - run on your own computer (supports live trading)
 
 1. Install **Python 3.10 or newer** from python.org. On Windows, tick **"Add Python to PATH"** in the installer.
 2. Download this repository (green **Code** button, **Download ZIP**) and unzip it.

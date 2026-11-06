@@ -5,3 +5,4 @@ state/
 *.csv
 __pycache__/
 .pytest_cache/
+.streamlit/secrets.toml

@@ -22,19 +22,22 @@ def _load(path: Path) -> dict:
     return yaml.safe_load(path.read_text()) or {} if path.exists() else {}
 
 
-def load_intraday_cfg(root: Path = ROOT) -> dict:
+def load_intraday_cfg(root: Path | None = None) -> dict:
+    root = root or ROOT
     cfg = deep_merge(_load(root / BASE), _load(root / USER))
     if os.environ.get("AGENT_GUI_LIVE") == "1":  # set only by the dashboard after its live confirmation
         cfg["mode"] = "live"
     return cfg
 
 
-def save_user_overrides(overrides: dict, root: Path = ROOT) -> None:
+def save_user_overrides(overrides: dict, root: Path | None = None) -> None:
+    root = root or ROOT
     merged = deep_merge(_load(root / USER), overrides)
     (root / USER).write_text("# Your dashboard settings (override config_intraday.yaml)\n" + yaml.safe_dump(merged, sort_keys=False))
 
 
-def reset_user_overrides(root: Path = ROOT) -> None:
+def reset_user_overrides(root: Path | None = None) -> None:
+    root = root or ROOT
     p = root / USER
     if p.exists():
         p.unlink()
