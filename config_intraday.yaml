@@ -1,0 +1,69 @@
+# Intraday (5-minute ORB) configuration. Credentials go in .env, NOT here:
+#   DHAN_CLIENT_ID=...   DHAN_ACCESS_TOKEN=...   (ANTHROPIC_API_KEY optional)
+
+mode: paper             # paper | live   (live also needs --live flag + LIVE_TRADING_CONFIRM=YES)
+
+data:
+  source: dhan          # dhan | csv | synthetic   (csv: data_5m/SYMBOL.csv with ts,open,high,low,close,volume)
+  csv_dir: data_5m
+  backtest_days: 30     # calendar days of 5-min history to pull from Dhan (Dhan may return less)
+
+dhan:
+  security_ids: {}      # optional manual overrides, e.g. {RELIANCE: "2885"}; others come from Dhan's scrip master
+
+universe:               # liquid NSE large caps suit intraday best
+  - RELIANCE
+  - HDFCBANK
+  - ICICIBANK
+  - SBIN
+  - INFY
+  - TCS
+  - AXISBANK
+  - KOTAKBANK
+  - LT
+  - BAJFINANCE
+  - BHARTIARTL
+  - ITC
+  - MARUTI
+  - SUNPHARMA
+  - NTPC
+  - ONGC
+  - TATASTEEL
+  - ADANIPORTS
+
+intraday:               # opening-range breakout on 5-minute candles
+  candle_minutes: 5
+  session_start: "09:15"
+  or_minutes: 15        # opening range = first 15 minutes
+  entry_cutoff: "14:30" # no new entries after this candle
+  squareoff_time: "15:10"
+  volume_mult: 1.5      # breakout candle volume vs 20-candle average
+  min_or_pct: 0.25      # skip if opening range narrower than this % of price
+  max_or_pct: 2.0       # ...or wider than this
+  atr_period: 14
+  atr_stop_mult: 1.5
+  min_stop_pct: 0.20    # skip if stop is closer than this % (costs would eat the trade)
+  reward_risk: 1.5
+  allow_short: true     # intraday shorts (MIS); set false for long-only
+
+risk:
+  starting_capital: 200000   # used by backtest / paper
+  trading_capital: 200000    # live sizing base - the amount you are willing to trade with, NOT your whole account
+  risk_per_trade_pct: 0.5
+  max_position_pct: 100      # max notional per trade as % of capital (>100 needs MIS leverage)
+  max_open_positions: 3
+  max_trades_per_day: 6
+  daily_loss_limit_pct: 1.5  # no new entries once the day is down this much
+  cost_pct_per_side: 0.03    # brokerage + STT + exchange + GST + stamp, approx
+  slippage_pct: 0.05
+
+live:
+  confirm_each_order: true        # keep true until you trust it; false = fully automatic orders
+  entry_limit_buffer_pct: 0.15    # marketable limit: entry price +/- this % so the order can fill
+  cancel_unfilled_after_cycles: 2 # cancel entry if still unfilled after this many 5-min cycles
+  candle_delay_seconds: 6         # wait this long after a candle closes before reading it
+
+claude_review:
+  enabled: true
+  model: claude-sonnet-5-5
+  max_turns: 6

@@ -1,0 +1,53 @@
+# NSE trading agent configuration
+
+mode: paper            # paper | live  (live also needs --live flag + env confirmation)
+
+data:
+  source: yfinance     # yfinance | csv | synthetic
+  csv_dir: data        # used when source = csv  (files named SYMBOL.csv with date,open,high,low,close,volume)
+  history_days: 400
+
+universe:              # NSE cash-market symbols (no .NS suffix)
+  - RELIANCE
+  - TCS
+  - HDFCBANK
+  - INFY
+  - ICICIBANK
+  - SBIN
+  - BHARTIARTL
+  - ITC
+  - LT
+  - AXISBANK
+  - KOTAKBANK
+  - HINDUNILVR
+  - MARUTI
+  - SUNPHARMA
+  - TATAMOTORS
+  - TITAN
+  - BAJFINANCE
+  - NTPC
+  - ONGC
+  - ADANIPORTS
+
+strategy:              # trend-following breakout, long only
+  ema_fast: 20
+  ema_slow: 50
+  breakout_lookback: 20     # close must exceed the prior N-day high
+  volume_mult: 1.5          # volume must exceed mult x 20-day average
+  atr_period: 14
+  atr_stop_mult: 2.0        # stop = close - mult x ATR
+  reward_risk: 2.0          # target = entry + rr x risk
+
+risk:
+  starting_capital: 500000  # INR
+  risk_per_trade_pct: 1.0   # % of equity risked per trade (entry to stop)
+  max_position_pct: 20.0    # max % of equity in one stock
+  max_open_positions: 5
+  daily_loss_limit_pct: 2.0 # stop opening new trades if equity drops this much from last run
+  cost_pct_per_side: 0.10   # brokerage + STT + charges, approx
+  slippage_pct: 0.05
+
+claude_review:
+  enabled: true             # needs ANTHROPIC_API_KEY; if false/missing, rule signals are used as is
+  model: claude-sonnet-5-5
+  max_turns: 8

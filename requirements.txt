@@ -1,0 +1,9 @@
+pandas
+numpy
+pyyaml
+yfinance
+anthropic
+dhanhq>=2.3.0
+psutil
+streamlit
+pytest
