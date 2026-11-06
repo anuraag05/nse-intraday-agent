@@ -74,7 +74,11 @@ def review_candidates(candidates: list[dict], indicators: dict, portfolio: dict,
     import anthropic  # pip install anthropic
 
     client = anthropic.Anthropic()
-    msgs = [{"role": "user", "content": "Candidates:\n" + json.dumps(candidates, indent=2)}]
+    from .research import research_notes_for_claude
+
+    notes = research_notes_for_claude()
+    intro = f"Findings from our own backtest research (use as context, they can be wrong):\n{notes}\n\n" if notes else ""
+    msgs = [{"role": "user", "content": intro + "Candidates:\n" + json.dumps(candidates, indent=2)}]
     known = {c["symbol"] for c in candidates}
 
     for _ in range(rcfg.get("max_turns", 8)):

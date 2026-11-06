@@ -181,6 +181,25 @@ def cmd_iscan(cfg, args):
     print(json.dumps(found, indent=2) if found else "No signals on the latest closed candles.")
 
 
+def cmd_research(cfg, args):
+    from trader import research
+
+    data = _intraday_data(cfg, 180)
+    if not data:
+        sys.exit("No data loaded.")
+    res = research.run(data, cfg, progress=lambda i, n: print(f"\rsearching settings {i}/{n}", end=""))
+    print(f"\n\nVERDICT: {res['verdict']}\n{res['message']}")
+    print("Out-of-sample:", {k: round(v, 3) for k, v in res["oos_stats"].items()})
+    for name, tab in res.get("insights", {}).items():
+        print(f"\n== {name} ==\n{tab.to_string()}")
+    print("\nNotes:", *res.get("notes", []), sep="\n - ")
+    research.save_learned(res)
+    if research.applicable(res):
+        print("\nSuggested settings:", res["best_params"], "\n(apply them in the dashboard's Learn tab)")
+    else:
+        print("\nNo settings are recommended.")
+
+
 def cmd_irun(cfg, args):
     from trader.live import run_intraday
 
@@ -189,14 +208,15 @@ def cmd_irun(cfg, args):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("command", choices=["backtest", "scan", "run", "status", "icheck", "ibacktest", "iscan", "irun"])
+    ap.add_argument("command", choices=["backtest", "scan", "run", "status", "icheck", "ibacktest", "iscan", "irun", "research"])
     ap.add_argument("symbol", nargs="?", help="symbol for icheck")
     ap.add_argument("--config", default="config.yaml")
     ap.add_argument("--live", action="store_true", help="send REAL orders (see README)")
     args = ap.parse_args()
-    if args.command.startswith("i"):
+    if args.command.startswith("i") or args.command == "research":
         cfg = _icfg(args)
-        {"icheck": cmd_icheck, "ibacktest": cmd_ibacktest, "iscan": cmd_iscan, "irun": cmd_irun}[args.command](cfg, args)
+        {"icheck": cmd_icheck, "ibacktest": cmd_ibacktest, "iscan": cmd_iscan, "irun": cmd_irun,
+         "research": cmd_research}[args.command](cfg, args)
     else:
         cfg = load_cfg(args.config)
         {"backtest": cmd_backtest, "scan": cmd_scan, "run": cmd_run, "status": cmd_status}[args.command](cfg, args)

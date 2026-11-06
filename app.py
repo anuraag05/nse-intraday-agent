@@ -8,6 +8,7 @@ import json
 import os
 import re
 import sys
+import zlib
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -101,8 +102,8 @@ with c2:
 if HOSTED and not _pw:
     st.warning("Anyone with this page's link can open it. Add APP_PASSWORD in the app's Secrets to lock it.")
 
-tab_setup, tab_settings, tab_bt, tab_run, tab_hist = st.tabs(
-    ["1 · Setup", "2 · Settings", "3 · Backtest", "4 · Run", "5 · History"]
+tab_setup, tab_settings, tab_bt, tab_learn, tab_run, tab_hist = st.tabs(
+    ["1 · Setup", "2 · Settings", "3 · Backtest", "4 · Learn", "5 · Run", "6 · History"]
 )
 
 # ------------------------------------------------------------------ setup
@@ -273,6 +274,80 @@ with tab_bt:
             x2.dataframe(t.groupby("side")["pnl"].agg(["count", "sum"]).round(0), use_container_width=True)
             st.dataframe(t, use_container_width=True, height=300)
             st.download_button("Download trades (CSV)", t.to_csv(index=False), "backtest_trades.csv", key="bt_dl")
+
+# ------------------------------------------------------------------ learn
+with tab_learn:
+    from trader import research
+
+    st.subheader("Learn what works")
+    st.caption("Tests hundreds of setting combinations on past 5-minute candles, but only counts a result if the winning "
+               "settings also made money on later weeks they never saw (walk-forward test). It tells you plainly when "
+               "there is NO edge. Needs about 3+ months of data; the more the better.")
+    a, b = st.columns([2, 1])
+    lsrc = a.radio("Data", ["Dhan (real market data)", "Demo - random data (should find nothing)",
+                            "Demo - data with a planted edge (should find it)"], key="learn_source")
+    ldays = b.slider("Calendar days of history", 60, 365, 180, key="learn_days")
+    if st.button("Run research", type="primary", key="learn_run"):
+        from trader.datasets import load_intraday
+        from trader.intraday import synthetic_intraday
+
+        c = cfg()
+        bar = st.progress(0.0, text="Loading candles...")
+        try:
+            if lsrc.startswith("Dhan"):
+                data = load_intraday(c, ldays, source="dhan",
+                                     progress=lambda i, n, s: bar.progress(i / n * 0.3, text=f"Loaded {s} ({i}/{n})"))
+            else:
+                edge = 0.0004 if "planted" in lsrc else 0.0
+                td = int(ldays * 5 / 7)
+                data = {s: synthetic_intraday(s, td, seed=zlib.crc32(s.encode()) % 10_000 + (1 if edge else 0), edge=edge, trend=0.0)
+                        for s in c["universe"]}
+            if not data:
+                st.error("No data loaded. Check the Setup tab.")
+            else:
+                res = research.run(data, c, progress=lambda i, n: bar.progress(0.3 + 0.7 * i / n, text="Testing settings..."))
+                research.save_learned(res)
+                st.session_state["learn"] = {"res": res, "demo": not lsrc.startswith("Dhan")}
+            bar.empty()
+        except Exception as e:
+            bar.empty()
+            st.error(f"Research failed: {e}")
+    L = st.session_state.get("learn")
+    if L:
+        res = L["res"]
+        if L["demo"]:
+            st.warning("Demo data - this only shows how the researcher behaves; it says nothing about real markets.")
+        {"EDGE FOUND": st.success, "UNCERTAIN": st.warning, "NO EDGE": st.error,
+         "NOT ENOUGH DATA": st.info}[res["verdict"]](f"**{res['verdict']}** - {res['message']}")
+        o, bl = res["oos_stats"], res.get("baseline_stats", {})
+        m = st.columns(4)
+        m[0].metric("Unseen-data trades", o["n"])
+        m[1].metric("Avg result per trade", f"{o['mean_R']:+.2f} R")
+        m[2].metric("95% range", f"{o['ci_low']:+.2f} to {o['ci_high']:+.2f}")
+        m[3].metric("Your current settings", f"{bl.get('mean_R', 0):+.2f} R")
+        st.caption("R = profit divided by the amount risked on the trade, after costs and slippage. "
+                   f"Tested {res['n_symbols']} stocks over {res['n_days']} trading days, {res['n_combos']} setting combinations.")
+        if res.get("notes"):
+            st.markdown("**What the data says** (current settings, no cherry-picking)")
+            for n_ in res["notes"]:
+                st.markdown(f"- {n_}")
+        for name, tab in res.get("insights", {}).items():
+            with st.expander(f"Results by {name}"):
+                st.dataframe(tab, use_container_width=True)
+        if len(res.get("folds", [])):
+            with st.expander("Walk-forward folds (each row: settings picked on past data, judged on the next weeks)"):
+                st.dataframe(res["folds"], use_container_width=True)
+        if research.applicable(res):
+            st.success("These settings survived the unseen-data test:")
+            st.json(res["best_params"])
+            if st.button("Apply these settings to the agent", type="primary", key="learn_apply"):
+                settings.save_user_overrides({"intraday": res["best_params"]})
+                st.success("Applied. Paper-trade them for a few weeks before trusting them.")
+        else:
+            st.info("No settings are recommended, so nothing can be applied. Your current settings stay as they are.")
+    prev = research.load_learned()
+    if prev and not L:
+        st.caption(f"Last research ({prev['when']}): {prev['verdict']} - {prev['message']}")
 
 # ------------------------------------------------------------------ run
 with tab_run:

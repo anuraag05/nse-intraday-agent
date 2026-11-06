@@ -20,7 +20,8 @@ def _mins(hhmm: str) -> int:
     return int(h) * 60 + int(m)
 
 
-def add_indicators(df: pd.DataFrame, p: dict) -> pd.DataFrame:
+def base_indicators(df: pd.DataFrame, p: dict) -> pd.DataFrame:
+    """VWAP, ATR, volume ratio, opening range. Depends only on atr_period, or_minutes, session/candle settings."""
     df = df.copy()
     idx = df.index
     day = idx.normalize()
@@ -42,7 +43,15 @@ def add_indicators(df: pd.DataFrame, p: dict) -> pd.DataFrame:
     or_cnt = pd.Series(in_or.astype(int), index=idx).groupby(day).transform("sum")
     df["or_high"] = df["high"].where(in_or).groupby(day).transform("max").where(or_cnt >= need)
     df["or_low"] = df["low"].where(in_or).groupby(day).transform("min").where(or_cnt >= need)
+    return df
 
+
+def apply_signals(df: pd.DataFrame, p: dict) -> pd.DataFrame:
+    """Entry rules + stops on top of base_indicators(). Cheap, so parameter research can re-run it many times."""
+    df = df.copy()
+    idx = df.index
+    mins = np.asarray(idx.hour * 60 + idx.minute)
+    or_end = _mins(p["session_start"]) + p["or_minutes"]
     width = (df["or_high"] - df["or_low"]) / df["close"]
     window = (mins >= or_end) & (mins <= _mins(p["entry_cutoff"]))
     base = (
@@ -59,6 +68,10 @@ def add_indicators(df: pd.DataFrame, p: dict) -> pd.DataFrame:
         & ((df["short_stop"] - df["close"]) >= min_d)
     )
     return df
+
+
+def add_indicators(df: pd.DataFrame, p: dict) -> pd.DataFrame:
+    return apply_signals(base_indicators(df, p), p)
 
 
 def signal_from_row(row: pd.Series, p: dict) -> dict | None:
@@ -193,8 +206,12 @@ def backtest_intraday(data: dict[str, pd.DataFrame], cfg: dict) -> dict:
     return {"trades": pd.DataFrame(trades), "equity": eq, "metrics": metrics(eq, trades, rk)}
 
 
-def synthetic_intraday(symbol: str, days: int = 40, seed: int | None = None) -> pd.DataFrame:
-    """Random 5-minute OHLCV (75 candles/day, 09:15-15:25). For tests/demos only."""
+def synthetic_intraday(symbol: str, days: int = 40, seed: int | None = None, edge: float = 0.0,
+                       trend: float = 0.00018) -> pd.DataFrame:
+    """Random 5-minute OHLCV (75 candles/day, 09:15-15:25). For tests/demos only.
+    edge > 0 plants a known effect: after a high-volume break of the first-15-minute range, price keeps going
+    in that direction (edge = extra drift per candle for 12 candles). Used to prove the research finds real edges.
+    trend = per-candle drift of trending days (0 = no trending days at all)."""
     import zlib
 
     rng = np.random.default_rng(seed if seed is not None else zlib.crc32(symbol.encode()))
@@ -203,14 +220,22 @@ def synthetic_intraday(symbol: str, days: int = 40, seed: int | None = None) -> 
     rows, idx, price = [], [], 1000.0
     for d in pd.bdate_range(end=pd.Timestamp.today().normalize() - pd.Timedelta(days=1), periods=days):
         price *= 1 + rng.normal(0, 0.006)
-        drift = rng.choice([-1, 0, 1]) * 0.00018
+        drift = rng.choice([-1, 0, 1]) * trend  # trend=0 gives a pure random walk (true null)
+        follow, fdir, orh, orl = 0, 0, -1e18, 1e18
         for i in range(n):
             o = price
             r = drift + rng.normal(0, 0.0014)
+            if follow > 0:
+                r += fdir * edge
+                follow -= 1
             c = o * (1 + r)
             h = max(o, c) * (1 + abs(rng.normal(0, 0.0006)))
             l = min(o, c) * (1 - abs(rng.normal(0, 0.0006)))
             v = rng.lognormal(10.5, 0.4) * u[i] * (3 if abs(r) > 0.003 else 1)
+            if i < 3:
+                orh, orl = max(orh, h), min(orl, l)
+            elif edge > 0 and follow == 0 and abs(r) > 0.003 and (c > orh or c < orl):
+                follow, fdir = 12, (1 if c > orh else -1)
             rows.append((o, h, l, c, v))
             idx.append(d + pd.Timedelta(hours=9, minutes=15 + 5 * i))
             price = c

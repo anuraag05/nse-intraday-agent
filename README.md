@@ -36,8 +36,9 @@ On the hosted app, the **Run** tab has **Start paper session**: keep that page o
 | **1 · Setup** | Paste your Dhan client ID and access token, then click **Test Dhan connection**. Check the candle times/prices against your chart. |
 | **2 · Settings** | Capital, risk per trade, max positions, daily loss limit, strategy numbers, stock list, safety switches. |
 | **3 · Backtest** | Replay the strategy on past candles (real Dhan data, or random demo data to try the app). |
-| **4 · Run** | **Paper** or **LIVE**. Start/stop the agent, approve or reject orders, pause entries, square off. |
-| **5 · History** | Trades and order approvals. |
+| **4 · Learn** | **Run research** on real Dhan data (3+ months recommended). It tests hundreds of setting combinations, but only trusts a result that also made money on later weeks it never saw. It shows what works and what doesn't (long vs short, time of day, volume, range width), says plainly if there is **NO EDGE**, and only offers an Apply button for settings that pass. Its findings are also passed to the Claude reviewer. |
+| **5 · Run** | **Paper** or **LIVE**. Start/stop the agent, approve or reject orders, pause entries, square off. |
+| **6 · History** | Trades and order approvals. |
 
 **Every morning:** the Dhan access token lasts 24 hours. Generate a new one in your Dhan account and paste it in Setup (the top banner shows when the current one expires). Start the agent before 09:15 IST; it exits by itself after square-off (15:10).
 
@@ -50,6 +51,9 @@ Your credentials are saved only in a private `.env` file on your computer (git-i
 - **Live orders:** entry, stop-loss and target go to Dhan as one **super order**, so protection stays at the exchange even if your computer goes offline. By default each live order waits for your **Approve** click (unanswered orders expire and are not sent; end-of-day square-offs auto-proceed).
 - **Safety controls:** type-to-confirm to enable live mode, pause-entries switch, square-off-now button, per-order approval, and it only ever closes positions it opened itself.
 
+## How the research avoids fooling itself
+It scores every setting in R-multiples (profit / amount risked) after costs and slippage, picks settings on a train window, and judges them only on the next unseen window, rolling forward through the data. Verdicts use a day-clustered 95% confidence interval: **EDGE FOUND** needs a positive average with the whole interval above zero; weaker results are **UNCERTAIN** or **NO EDGE**. Validated on synthetic data: 8 of 8 truly random datasets correctly gave no edge, and 3 of 3 datasets with a planted effect were found. This proves the method works, not that your market has an edge. Real results depend on real data.
+
 ## Not yet verified against the real Dhan API
 This was built and tested without access to Dhan's servers: tests use a fake Dhan client and the official SDK's source. Unverified: the candle response format and timestamps, the security-list file columns, super-order cancel behaviour, and the positions response fields. Use **Test Dhan connection** first; run paper mode for several days; try live with a tiny trading capital (a few thousand rupees) before real size. If something looks off, open an issue with the dashboard's message (without any token).
 
@@ -59,10 +63,10 @@ Backtests fill at the next candle open with fixed slippage; real slippage, parti
 ## For developers
 ```
 pip install -r requirements.txt
-python -m pytest -q                  # 38 tests (strategy, brokers, loop simulation, dashboard UI)
+python -m pytest -q                  # 49 tests (strategy, brokers, loop simulation, research, dashboard UI)
 streamlit run app.py                 # dashboard
 python main.py icheck RELIANCE       # CLI: connection check
-python main.py ibacktest | iscan | irun [--live]
+python main.py ibacktest | iscan | research | irun [--live]
 ```
 Layout: `app.py` dashboard · `trader/intraday.py` strategy + backtester · `trader/live.py` session loop · `trader/ibroker.py` paper + Dhan brokers · `trader/dhan_client.py` data/ids · `trader/approvals.py` order approvals · `trader/runner.py` background process · `config_intraday.yaml` defaults (your dashboard edits go to the git-ignored `config_user.yaml`).
 

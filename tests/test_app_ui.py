@@ -30,7 +30,7 @@ def at(tmp_path, monkeypatch):
 
 def test_renders_without_errors(at):
     assert not at.exception
-    assert len(at.tabs) == 5
+    assert len(at.tabs) == 6
     assert any("No Dhan credentials" in w.value for w in at.warning)
 
 
@@ -98,7 +98,7 @@ def test_password_gate(tmp_path, monkeypatch):
     app.text_input(key="pw").set_value("wrong").run()
     assert any("Wrong password" in e.value for e in app.error) and len(app.tabs) == 0
     app.text_input(key="pw").set_value("s3cret").run()
-    assert len(app.tabs) == 5 and not app.exception
+    assert len(app.tabs) == 6 and not app.exception
 
 
 def test_hosted_paper_session_steps_through_the_day(tmp_path, monkeypatch):
@@ -132,3 +132,14 @@ def test_hosted_paper_session_steps_through_the_day(tmp_path, monkeypatch):
     app.button(key="tick_now").click().run()
     assert not app.exception
     assert any("Done for today" in c.value for c in app.code)
+
+
+def test_learn_tab_demo_runs(at):
+    (Path.cwd() / "config_user.yaml").write_text("universe: [A, B, C, D, E, F]\n")
+    at.radio(key="learn_source").set_value("Demo - random data (should find nothing)")
+    at.slider(key="learn_days").set_value(180)
+    at.button(key="learn_run").click().run(timeout=180)
+    assert not at.exception, at.exception
+    assert len(at.metric) >= 4 and any("Demo data" in w.value for w in at.warning)
+    assert not any(b.key == "learn_apply" for b in at.button)             # random data -> nothing to apply
+    assert (Path.cwd() / "state" / "learned.json").exists()
